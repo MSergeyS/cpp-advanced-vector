@@ -212,7 +212,7 @@ public:
         // Используем if constexpr. Это версия оператора if, которая выполняется во время компиляции.
         // Выражение в условии должно быть константой времени компиляции. В итоге скомпилируется
         // только одна из двух веток, что и требуется:
-        VMove(data_.GetAddress(), size_, new_data.GetAddress());
+        SafeMove(data_.GetAddress(), size_, new_data.GetAddress());
         data_.Swap(new_data);
     }
 
@@ -300,7 +300,7 @@ public:
         if (size_ == Capacity()) {
             RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
             CopyConstruct(&new_data[size_], value);
-            VMove(data_.GetAddress(), size_, new_data.GetAddress());
+            SafeMove(data_.GetAddress(), size_, new_data.GetAddress());
             data_.Swap(new_data);
         } else {
             CopyConstruct(&data_[size_], value);
@@ -352,7 +352,7 @@ public:
         if (size_ == Capacity()) {
             RawMemory<T> new_data{size_ == 0 ? 1 : size_ * 2};
             new (new_data + size_) T(std::forward<Args>(args)...);
-            VMove(data_.GetAddress(), size_, new_data.GetAddress());
+            SafeMove(data_.GetAddress(), size_, new_data.GetAddress());
             data_.Swap(new_data);
         } else {
             new (data_ + size_) T(std::forward<Args>(args)...);
@@ -364,6 +364,7 @@ public:
     template<typename... Args>
     iterator Emplace(const_iterator pos, Args&&... args) {
         if (pos == end()) {
+            assert(pos >= begin() && pos <= end());
             return &EmplaceBack(std::forward<Args>(args)...);
         }
         if (size_ == Capacity()) {
@@ -404,7 +405,7 @@ public:
 
     iterator Erase(const_iterator pos)
     noexcept(std::is_nothrow_move_assignable_v<T>) {
-        assert(size_ > 0);
+        assert(pos >= begin() && pos < end());
         size_t index = static_cast<size_t>(pos - begin());
         std::move(begin() + index + 1, end(), begin() + index);
         data_[size_ - 1].~T();
@@ -422,14 +423,14 @@ private:
         RawMemory<T> new_data{size_ == 0 ? 1 : size_ * 2};
         new (new_data + index) T(std::forward<Args>(args)...);
         try {
-            VMove(data_.GetAddress(), index, new_data.GetAddress());
+            SafeMove(data_.GetAddress(), index, new_data.GetAddress());
         }  catch (...) {
             new_data[index].~T();
             throw;
         }
 
         try {
-            VMove(data_+index, size_ - index, new_data + (index+1));
+            SafeMove(data_+index, size_ - index, new_data + (index+1));
         }  catch (...) {
             std::destroy_n(new_data.GetAddress(), index + 1);
             throw;
@@ -454,7 +455,7 @@ private:
         return begin() + index;
     }
 
-    void VMove(T *from, size_t size, T *to) {
+    void SafeMove(T *from, size_t size, T *to) {
         if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
             std::uninitialized_move_n(from, size, to);
         } else {
